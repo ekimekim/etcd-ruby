@@ -59,6 +59,7 @@ module Etcd
       @config.password = opts[:password] || nil
       @config.allow_redirect = opts.key?(:allow_redirect) ? opts[:allow_redirect] : true
       yield @config if block_given?
+      @cluster = machines
     end
     # rubocop:enable CyclomaticComplexity
 
@@ -104,14 +105,22 @@ module Etcd
         fail "Unknown http action: #{method}"
       end
       timeout = options[:timeout] || @read_timeout
-      http = Net::HTTP.new(host, port)
-      http.read_timeout = timeout
-      setup_https(http)
-      req.basic_auth(user_name, password) if [user_name, password].all?
-      Log.debug("Invoking: '#{req.class}' against '#{path}")
-      res = http.request(req)
-      Log.debug("Response code: #{res.code}")
-      process_http_request(res, req, params)
+      result = nil
+      @cluster.each do |cluster_host|
+        begin
+          http = Net::HTTP.new(host, port)
+          http.read_timeout = timeout
+          setup_https(http)
+          req.basic_auth(user_name, password) if [user_name, password].all?
+          Log.debug("Invoking: '#{req.class}' against '#{path}")
+          res = http.request(req)
+          Log.debug("Response code: #{res.code}")
+          return process_http_request(res, req, params)
+        rescue Errno::ECONNREFUSED, HTTPClient::TimeoutError => e
+          next
+        end
+      end
+      raise AllNodesDown
     end
 
     def setup_https(http)
